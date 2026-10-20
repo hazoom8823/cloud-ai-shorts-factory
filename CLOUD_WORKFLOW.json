@@ -1,0 +1,18 @@
+{
+  "name": "Cloud AI Shorts Factory",
+  "kind": "GitHub Actions cloud workflow configuration",
+  "not_a_make_or_n8n_blueprint": true,
+  "workflow_file": ".github/workflows/daily-short.yml",
+  "entrypoint": "src/creator.py",
+  "steps": [
+    "Gemini API: generate story, title, tags, 5-scene shot list",
+    "Gemini TTS API: generate Arabic narration audio",
+    "Pexels API: search/download portrait stock footage with attribution",
+    "FFmpeg on ephemeral GitHub-hosted runner: assemble vertical video and burn Arabic captions",
+    "YouTube Data API: upload as Private by default",
+    "GitHub Actions artifact: retain output for 7 days"
+  ],
+  "cost_model": "Free tiers/quotas only; stock footage montage, not generative text-to-video; no machine-local agent",
+  "schedule_cron_utc": "0 16 * * *",
+  "default_upload_privacy": "private"
+}

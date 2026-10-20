@@ -1,0 +1,6 @@
+out/
+.env
+*.mp4
+*.wav
+*.json
+!requirements.txt
