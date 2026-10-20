@@ -1,0 +1,64 @@
+name: Cloud AI Shorts Factory
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 16:00 UTC: 19:00 Cairo during Egypt daylight time, 18:00 during winter time.
+    - cron: '0 16 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-ai-shorts-factory
+  cancel-in-progress: false
+
+jobs:
+  create-and-upload:
+    # Runs on GitHub-hosted infrastructure; nothing is installed on your computer.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+      YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+      YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+      YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+      GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.1-flash-lite' }}
+      TTS_MODEL: ${{ vars.TTS_MODEL || 'gemini-3.8-flash-lite-tts' }}
+      CHANNEL_TOPIC: ${{ vars.CHANNEL_TOPIC || 'قصص قصيرة خيالية مشوقة بنهاية غير متوقعة' }}
+      YOUTUBE_PRIVACY: ${{ vars.YOUTUBE_PRIVACY || 'private' }}
+
+    steps:
+      - name: Checkout workflow
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+
+      - name: Install video tools and Arabic fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-noto-core fontconfig
+          fc-cache -f
+          ffmpeg -version | head -n 1
+          fc-match 'Noto Naskh Arabic' -f '%{file}\n'
+
+      - name: Install Python packages
+        run: pip install -r requirements.txt
+
+      - name: Generate video and upload privately
+        run: python src/creator.py
+
+      - name: Save preview and metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloud-ai-shorts-output
+          path: out/
+          if-no-files-found: ignore
+          retention-days: 7
