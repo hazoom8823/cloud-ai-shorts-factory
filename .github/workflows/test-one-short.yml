@@ -1,4 +1,4 @@
-if not times:
+                  if not times:
                       continue
                   vals = [int(v) for v in times.groups()]
                   start = vals[0]*3600 + vals[1]*60 + vals[2] + vals[3]/1000
