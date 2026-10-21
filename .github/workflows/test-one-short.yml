@@ -1,3 +1,259 @@
+name: Test One AI Short (Cinematic Free)
+
+'on':
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: "موضوع الريلز بالعربي"
+        required: true
+        type: string
+        default: "قصة غامضة قصيرة بنهاية غير متوقعة"
+
+permissions:
+  contents: read
+
+jobs:
+  create-one-short:
+    name: Create one cinematic vertical short (no YouTube upload)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Install FFmpeg and Arabic fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-noto-core fonts-noto-extra
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install free packages
+        run: python -m pip install --upgrade requests edge-tts
+
+      - name: Create cinematic test Short
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          TOPIC: ${{ inputs.topic }}
+        run: |
+          cat > /tmp/create_short.py <<'AI_SHORTS_SCRIPT'
+          #!/usr/bin/env python3
+          import json, os, re, subprocess, sys, time
+          from pathlib import Path
+          from urllib.parse import urlparse
+          import requests
+
+          OUT = Path("output")
+          ASSETS = OUT / "assets"
+          OUT.mkdir(exist_ok=True)
+          ASSETS.mkdir(exist_ok=True)
+          GEMINI_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+          PIXABAY_KEY = os.getenv("PIXABAY_API_KEY", "").strip()
+          TOPIC = os.getenv("TOPIC", "قصة غامضة قصيرة بنهاية غير متوقعة").strip()
+          SESSION = requests.Session()
+          SESSION.headers.update({"User-Agent": "CloudAIShortsFactory/2.0"})
+          MAX_CLIP_BYTES = 60 * 1024 * 1024
+
+          if not GEMINI_KEY:
+              raise SystemExit("Missing GitHub Secret GEMINI_API_KEY")
+          if not PIXABAY_KEY:
+              raise SystemExit("Missing GitHub Secret PIXABAY_API_KEY. Create a free Pixabay API key and add it in Settings > Secrets and variables > Actions.")
+
+
+          def run(cmd, capture=False):
+              print("RUN:", " ".join(str(x) for x in cmd[:7]), "...")
+              return subprocess.run(cmd, check=True, text=capture, stdout=subprocess.PIPE if capture else None,
+                                    stderr=subprocess.PIPE if capture else None)
+
+
+          def media_duration(path):
+              p = run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)], capture=True)
+              return max(0.1, float(p.stdout.strip()))
+
+
+          def request_story(topic):
+              prompt = f"""أنت كاتب ومخرج Reels محترف. أنشئ قصة أصلية بالعربية المصرية الطبيعية مدتها 35-45 ثانية، من 75 إلى 95 كلمة منطوقة.
+          الموضوع: {topic}
+          اجعل أول ثانية Hook فضوليًا قويًا، ثم خمس لحظات بصرية متصاعدة، ثم نهاية مؤثرة أو مفاجأة منطقية. لا تقل إنها قصة حقيقية إذا كانت خيالية.
+          أخرج JSON فقط بالشكل التالي:
+          {{
+           "title":"عنوان عربي جذاب من 4 إلى 8 كلمات",
+           "hook":"جملة افتتاحية قصيرة لا تتجاوز 7 كلمات",
+           "narration":"النص كاملًا باللهجة المصرية، 75-95 كلمة",
+           "description":"وصف عربي مناسب للفيديو و3 هاشتاجات",
+           "scenes":[
+            {{"search_query":"specific English query for a real cinematic vertical video shot","caption":"جملة بصرية قصيرة بالعربية"}},
+            {{"search_query":"...","caption":"..."}},
+            {{"search_query":"...","caption":"..."}},
+            {{"search_query":"...","caption":"..."}},
+            {{"search_query":"...","caption":"..."}}
+           ]
+          }}
+          قواعد المشاهد: ابحث عن لقطات واقعية محددة لا عن رسوم أو صور ثابتة. غيّر المكان والفعل بين كل لقطة. مثال جيد: "lonely man walking rainy city night cinematic" وليس "sad story". اجعل النص منطقيًا ومتصلاً، بلا إيموجي، ولا تذكر أفلامًا أو شخصيات محمية. لا تضف أي شيء خارج JSON."""
+              errors = []
+              for model in ("gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash"):
+                  url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+                  try:
+                      response = SESSION.post(url, params={"key": GEMINI_KEY}, json={
+                          "contents": [{"parts": [{"text": prompt}]}],
+                          "generationConfig": {"temperature": 0.9, "responseMimeType": "application/json"}
+                      }, timeout=120)
+                      if not response.ok:
+                          errors.append(f"{model} HTTP {response.status_code}: {response.text[:200]}")
+                          continue
+                      raw = response.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+                      raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.I)
+                      plan = json.loads(raw)
+                      scenes = plan.get("scenes")
+                      if not isinstance(scenes, list) or len(scenes) != 5:
+                          raise ValueError("Story must contain exactly five visual scenes")
+                      narration = str(plan.get("narration", "")).strip()
+                      words = len(narration.split())
+                      if words < 65 or words > 115:
+                          raise ValueError(f"Narration length unsuitable ({words} words)")
+                      for i, s in enumerate(scenes):
+                          for key in ("search_query", "caption"):
+                              if not isinstance(s.get(key), str) or not s[key].strip():
+                                  raise ValueError(f"Scene {i+1} missing {key}")
+                          s["search_query"] = s["search_query"].strip()[:100]
+                          s["caption"] = s["caption"].strip()[:55]
+                      plan["title"] = str(plan.get("title", "قصة قصيرة مشوقة"))[:85]
+                      plan["hook"] = str(plan.get("hook", plan["title"]))[:65]
+                      plan["narration"] = narration
+                      plan["description"] = str(plan.get("description", "قصة قصيرة بمساعدة الذكاء الاصطناعي"))
+                      plan["model"] = model
+                      return plan
+                  except Exception as exc:
+                      errors.append(f"{model}: {type(exc).__name__}: {exc}")
+              raise RuntimeError("Gemini story generation failed. Check model availability/quota: " + " | ".join(errors))
+
+
+          def search_pixabay(query):
+              response = SESSION.get("https://pixabay.com/api/videos/", params={
+                  "key": PIXABAY_KEY, "q": query, "video_type": "film", "safesearch": "true",
+                  "per_page": 20, "min_width": 640, "min_height": 800, "lang": "en"
+              }, timeout=60)
+              if response.status_code == 429:
+                  raise RuntimeError("Pixabay API rate limit reached; wait and retry")
+              response.raise_for_status()
+              payload = response.json()
+              if "hits" not in payload:
+                  raise RuntimeError("Pixabay API response did not include video hits")
+              return payload.get("hits", [])
+
+
+          def choose_file(video):
+              variants = video.get("videos", {})
+              files = []
+              for quality in ("large", "medium", "small", "tiny"):
+                  f = variants.get(quality) or {}
+                  if f.get("url"):
+                      files.append({**f, "quality": quality})
+              if not files:
+                  return None
+              vertical = [f for f in files if int(f.get("height") or 0) >= int(f.get("width") or 0)]
+              choices = vertical or files
+              def score(f):
+                  w, h = int(f.get("width") or 0), int(f.get("height") or 0)
+                  ratio = w / h if h else 10
+                  highres_penalty = 0 if h <= 1920 else (h - 1920) / 1920
+                  return (abs(ratio - 9/16) + highres_penalty * 0.15, -min(h, 1920), int(f.get("size") or 0))
+              best = sorted(choices, key=score)[0]
+              return {**best, "link": best.get("url", "") }
+
+
+          def download_scene(scene, index, used_ids):
+              base = scene["search_query"]
+              # Relax search wording only; never replace a missing scene with unrelated generic footage.
+              tokens = base.split()
+              queries = list(dict.fromkeys([base, " ".join(tokens[:4]), " ".join(tokens[:3])]))
+              last_error = "no relevant results"
+              for query in queries:
+                  try:
+                      videos = search_pixabay(query)
+                      videos.sort(key=lambda v: (
+                          0 if any(int((f or {}).get("height") or 0) >= int((f or {}).get("width") or 0)
+                                   for f in (v.get("videos") or {}).values()) else 1,
+                          -max([int((f or {}).get("height") or 0) for f in (v.get("videos") or {}).values()] or [0]),
+                          -int(v.get("duration") or 0)
+                      ))
+                      for video in videos:
+                          vid = str(video.get("id", ""))
+                          if not vid or vid in used_ids:
+                              continue
+                          vf = choose_file(video)
+                          if not vf:
+                              continue
+                          path = ASSETS / f"scene_{index:02d}.mp4"
+                          try:
+                              with SESSION.get(vf["link"], stream=True, timeout=(20, 90)) as response:
+                                  response.raise_for_status()
+                                  total = 0
+                                  with path.open("wb") as f:
+                                      for block in response.iter_content(chunk_size=1024 * 512):
+                                          if not block:
+                                              continue
+                                          total += len(block)
+                                          if total > MAX_CLIP_BYTES:
+                                              raise RuntimeError("clip exceeded 60 MB limit")
+                                          f.write(block)
+                              if total < 50_000:
+                                  raise RuntimeError("clip download was too small")
+                              probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)], capture_output=True, text=True)
+                              if probe.returncode or not probe.stdout.strip():
+                                  raise RuntimeError("downloaded asset is not a valid video")
+                              used_ids.add(vid)
+                              return {
+                                  "path": str(path), "video_id": vid,
+                                  "video_page": video.get("pageURL", "https://pixabay.com/videos/"),
+                                  "creator": video.get("user", "Pixabay contributor"),
+                                  "creator_url": "https://pixabay.com/users/" + str(video.get("user_id", "")) + "/",
+                                  "width": vf.get("width"), "height": vf.get("height"), "query": query,
+                              }
+                          except Exception as exc:
+                              path.unlink(missing_ok=True)
+                              last_error = str(exc)
+                  except Exception as exc:
+                      last_error = f"{type(exc).__name__}: {exc}"
+                  time.sleep(0.25)
+              raise RuntimeError(f"No suitable unique video found for scene {index} ({base!r}). It will NOT reuse an unrelated clip. Last detail: {last_error}")
+
+
+          def ass_time(s):
+              s = max(0, float(s))
+              total_cs = int(round(s * 100))
+              hours, total_cs = divmod(total_cs, 360000)
+              minutes, total_cs = divmod(total_cs, 6000)
+              seconds, cs = divmod(total_cs, 100)
+              return f"{hours}:{minutes:02d}:{seconds:02d}.{cs:02d}"
+
+
+          def ass_escape(t):
+              return str(t).replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}").replace("\n", "\\N")
+
+
+          def srt_to_ass(srt_path, plan, narration_duration):
+              raw = srt_path.read_text(encoding="utf-8-sig")
+              blocks = re.split(r"\n\s*\n", raw.strip()) if raw.strip() else []
+              # Designed for 1080x1920. Distinct typographic hierarchy: hook top, phrase captions bottom.
+              lines = [
+                  "[Script Info]", "ScriptType: v4.00+", "PlayResX: 1080", "PlayResY: 1920", "WrapStyle: 2", "ScaledBorderAndShadow: yes", "",
+                  "[V4+ Styles]",
+                  "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding",
+                  "Style: Caption,Noto Sans Arabic,58,&H00FFFFFF,&H0000D7FF,&H00101018,&HBC000000,-1,0,0,0,100,100,0,0,3,3,1,2,80,80,270,1",
+                  "Style: Hook,Noto Sans Arabic,82,&H0000D7FF,&H0000D7FF,&H00101018,&HAA000000,-1,0,0,0,100,100,1,0,3,4,2,8,70,70,175,1",
+                  "Style: SceneTag,Noto Sans Arabic,48,&H00FFFFFF,&H0000D7FF,&H00101018,&HAA000000,-1,0,0,0,100,100,0,0,3,3,1,8,70,70,300,1",
+                  "", "[Events]", "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text"
+              ]
+              hook_end = min(2.9, narration_duration)
+              lines.append(f"Dialogue: 3,{ass_time(0)},{ass_time(hook_end)},Hook,,0,0,0,,{{\\fad(220,250)\\fscx82\\fscy82\\t(0,260,\\fscx100\\fscy100)}}{ass_escape(plan['hook'])}")
+              # Use actual speech timings generated by Edge TTS; keep phrase-sized, readable captions.
+              for block in blocks:
+                  parts = block.splitlines()
+                  if len(parts) < 3:
+                      continue
+                  times = re.match(r"(\d\d):(\d\d):(\d\d)[,.](\d\d\d)\s+-->\s+(\d\d):(\d\d):(\d\d)[,.](\d\d\d)", parts[1].strip())
                   if not times:
                       continue
                   vals = [int(v) for v in times.groups()]
